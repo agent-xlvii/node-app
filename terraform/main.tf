@@ -2,7 +2,7 @@ module "ecs_app" {
   source                       = "./modules/ecs"
   ec2_task_execution_role_name = "EcsTaskExecutionRoleName"
   ecs_auto_scale_role_name     = "EcsAutoScaleRoleName"
-  app_image                    = "167365792572.dkr.ecr.us-west-1.amazonaws.com/django-app:production"
+  app_image                    = "167365792572.dkr.ecr.us-west-1.amazonaws.com/my-node-project:production"
   app_port                     = 8000
   app_count                    = 1
   health_check_path            = "/"
@@ -40,16 +40,7 @@ module "remote_backend" {
   dynamodb_table_name = "terraform-state-lock-table"
 }
 
-module "rds" {
-  source     = "./modules/rds"
-  depends_on = [module.network.vpc_id]
-  subnet_ids = module.network.private_subnet_ids
-  vpc_id     = module.network.vpc_id
-  ecs_tasks_security_group_id = module.security.ecs_tasks_security_group_id
-}
-
-
 module "s3" {
   source = "./modules/s3_img"
-  bucket_name = "bucket-image-codewithmuh-454"
+  bucket_name = "bucket-image-robyn-uzor-99"
 }
