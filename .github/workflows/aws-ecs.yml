@@ -7,13 +7,11 @@ on:
 
 env:
   AWS_REGION: us-east-1                  # set this to your preferred AWS region, e.g. us-west-1
-  ECR_REPOSITORY: node-ecr           # set this to your Amazon ECR repository name
+  ECR_REPOSITORY: node-ecr               # set this to your Amazon ECR repository name
   ECS_SERVICE: ecs-service               # set this to your Amazon ECS service name
-  ECS_CLUSTER: ecs-cluster                 # set this to your Amazon ECS cluster name
-  ECS_TASK_DEFINITION: ecs-app-task # set this to the path to your Amazon ECS task definition
-                                               # file, e.g. .aws/task-definition.json
-  CONTAINER_NAME: n          # set this to the name of the container in the
-                                               # containerDefinitions section of your task definition
+  ECS_CLUSTER: ecs-cluster               # set this to your Amazon ECS cluster name
+  ECS_TASK_DEFINITION: ecs-app-task     # set this to your existing ECS task definition name (not path)
+  CONTAINER_NAME: n                      # set this to the name of the container in the containerDefinitions section of your task definition
 
 permissions:
   contents: read
@@ -56,9 +54,9 @@ jobs:
   deploy:
     name: Deploy
     runs-on: self-hosted
-  
+
     needs: build-and-push
-  
+
     steps:
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
@@ -66,13 +64,20 @@ jobs:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
-  
-      - name: Deploy Amazon ECS task definition
-        id: deploy
+
+      - name: Get current task definition revision
+        id: get-task-definition
+        run: |
+          # Retrieve the latest revision of the ECS task definition
+          NEW_TASK_DEFINITION=$(aws ecs describe-task-definition --task-definition $ECS_TASK_DEFINITION --query 'taskDefinition.taskDefinitionArn' --output text)
+          echo "NEW_TASK_DEFINITION=$NEW_TASK_DEFINITION" >> $GITHUB_ENV
+
+      - name: Update ECS Service with the new task definition
+        id: update-service
         run: |
           # Update ECS Service with the new task definition
           aws ecs update-service --cluster $ECS_CLUSTER --service $ECS_SERVICE --task-definition $NEW_TASK_DEFINITION --force-new-deployment
-  
+
       - name: Wait for deployment to stabilize
         id: wait
         run: |
@@ -85,7 +90,7 @@ jobs:
           done
           echo "Deployment status: $STATUS"
           echo "::set-output name=status::$STATUS"
-  
+
       - name: Rollback if deployment failed
         if: steps.wait.outputs.status == 'FAILED'
         run: |
@@ -93,13 +98,8 @@ jobs:
           PREV_TASK_DEFINITION=$(aws ecs describe-services --cluster $ECS_CLUSTER --services $ECS_SERVICE --query 'services[0].deployments[1].taskDefinition' --output text)
           aws ecs update-service --cluster $ECS_CLUSTER --service $ECS_SERVICE --task-definition $PREV_TASK_DEFINITION --force-new-deployment
           echo "Rollback to previous task definition ($PREV_TASK_DEFINITION) initiated."
-  
+
       - name: Notify on rollback
         if: steps.wait.outputs.status == 'FAILED'
         run: |
           echo "Deployment failed. Rollback has been initiated. Please check ECS for further details."
-  
-  
-      - name: Deploy Amazon ECS task definition
-        run: 
-          aws ecs update-service --cluster $ECS_CLUSTER --no-paginate --service $ECS_SERVICE --force-new-deployment
