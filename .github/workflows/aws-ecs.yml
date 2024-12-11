@@ -6,12 +6,14 @@ on:
       - main
 
 env:
-  AWS_REGION: us-east-1
-  ECR_REPOSITORY: node-ecr
-  ECS_SERVICE: ecs-service
-  ECS_CLUSTER: ecs-cluster
-  ECS_TASK_DEFINITION: ecs-app-task
-  CONTAINER_NAME: node-app
+  AWS_REGION: us-east-1                  # set this to your preferred AWS region, e.g. us-west-1
+  ECR_REPOSITORY: node-ecr           # set this to your Amazon ECR repository name
+  ECS_SERVICE: ecs-service               # set this to your Amazon ECS service name
+  ECS_CLUSTER: ecs-cluster                 # set this to your Amazon ECS cluster name
+  ECS_TASK_DEFINITION: ecs-app-task:1 # set this to the path to your Amazon ECS task definition
+                                               # file, e.g. .aws/task-definition.json
+  CONTAINER_NAME: n          # set this to the name of the container in the
+                                               # containerDefinitions section of your task definition
 
 permissions:
   contents: read
@@ -20,37 +22,43 @@ jobs:
   build-and-push:
     name: Build and Push
     runs-on: self-hosted
+    # environment: production
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+    - name: Checkout
+      uses: actions/checkout@v4
 
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ env.AWS_REGION }}
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: ${{ env.AWS_REGION }}
 
-      - name: Login to Amazon ECR
-        id: login-ecr
-        uses: aws-actions/amazon-ecr-login@v2
+    - name: Login to Amazon ECR
+      id: login-ecr
+      uses: aws-actions/amazon-ecr-login@v2
 
-      - name: Build, tag, and push image to Amazon ECR
-        id: build-image
-        env:
-          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
-          IMAGE_TAG: production
-        run: |
-          docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG -f ./my-node-project/Dockerfile .
-          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
-          echo "image=$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" >> $GITHUB_ENV
+    - name: Build, tag, and push image to Amazon ECR
+      id: build-image
+      env:
+        ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+        IMAGE_TAG: production
+      run: |
+        # Build a docker container and
+        # push it to ECR so that it can
+        # be deployed to ECS.
+        docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG -f ./my-node-project/Dockerfile .
+        docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+
+        echo "image=$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" >> $GITHUB_ENV
 
   deploy:
     name: Deploy
     runs-on: self-hosted
+  
     needs: build-and-push
-
+  
     steps:
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
@@ -58,27 +66,17 @@ jobs:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
-
-      - name: Register new task definition
-        id: register-task-def
+  
+      - name: Deploy Amazon ECS task definition
+        id: deploy
         run: |
-          # Replace the image in the task definition with the new image
-          NEW_TASK_DEFINITION=$(aws ecs describe-task-definition --task-definition $ECS_TASK_DEFINITION | \
-          jq '.taskDefinition | .containerDefinitions[0].image="'$ECR_REGISTRY'/'$ECR_REPOSITORY':production"' | \
-          jq '{family: .family, containerDefinitions: .containerDefinitions, cpu: .cpu, memory: .memory, executionRoleArn: .executionRoleArn, networkMode: .networkMode, requiresCompatibilities: .requiresCompatibilities, taskRoleArn: .taskRoleArn}')
-          
-          echo "$NEW_TASK_DEFINITION" > new-task-def.json
-          REGISTERED_TASK_DEF=$(aws ecs register-task-definition --cli-input-json file://new-task-def.json)
-          echo "Registered Task Definition: $REGISTERED_TASK_DEF"
-          echo "task-def-arn=$(echo $REGISTERED_TASK_DEF | jq -r '.taskDefinition.taskDefinitionArn')" >> $GITHUB_ENV
-
-      - name: Deploy ECS Service
-        run: |
-          aws ecs update-service --cluster $ECS_CLUSTER --service $ECS_SERVICE --task-definition ${{ env.task-def-arn }} --force-new-deployment
-
+          # Update ECS Service with the new task definition
+          aws ecs update-service --cluster $ECS_CLUSTER --service $ECS_SERVICE --task-definition $NEW_TASK_DEFINITION --force-new-deployment
+  
       - name: Wait for deployment to stabilize
         id: wait
         run: |
+          # Wait for the deployment to stabilize
           STATUS=$(aws ecs describe-services --cluster $ECS_CLUSTER --services $ECS_SERVICE --query 'services[0].deployments[0].rolloutState' --output text)
           while [[ $STATUS != "COMPLETED" && $STATUS != "FAILED" ]]; do
             echo "Waiting for deployment to stabilize..."
@@ -87,10 +85,21 @@ jobs:
           done
           echo "Deployment status: $STATUS"
           echo "::set-output name=status::$STATUS"
-
+  
       - name: Rollback if deployment failed
         if: steps.wait.outputs.status == 'FAILED'
         run: |
+          # Rollback to the previous task definition
           PREV_TASK_DEFINITION=$(aws ecs describe-services --cluster $ECS_CLUSTER --services $ECS_SERVICE --query 'services[0].deployments[1].taskDefinition' --output text)
           aws ecs update-service --cluster $ECS_CLUSTER --service $ECS_SERVICE --task-definition $PREV_TASK_DEFINITION --force-new-deployment
           echo "Rollback to previous task definition ($PREV_TASK_DEFINITION) initiated."
+  
+      - name: Notify on rollback
+        if: steps.wait.outputs.status == 'FAILED'
+        run: |
+          echo "Deployment failed. Rollback has been initiated. Please check ECS for further details."
+  
+  
+      - name: Deploy Amazon ECS task definition
+        run: 
+          aws ecs update-service --cluster $ECS_CLUSTER --no-paginate --service $ECS_SERVICE --force-new-deployment
