@@ -23,7 +23,7 @@ variable "app_count" {
 }
 
 variable "health_check_path" {
-  description = "health path"
+  description = "/health"
 }
 
 variable "fargate_cpu" {

@@ -4,6 +4,11 @@ const app = express();
 // The port must match the container port (e.g., 3000).
 const port = 3000;
 
+// Health check route for load balancer
+app.get('/health', (req, res) => {
+  res.status(200).send('OK');
+});
+
 // Basic route
 app.get('/', (req, res) => {
   res.send('<h1>Welcome to My Simple App!</h1><p>Try visiting <a href="/about">About</a> or <a href="/random">Random Number</a>.</p>');
