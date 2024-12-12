@@ -1,5 +1,7 @@
 const express = require('express');
 const app = express();
+
+// The port must match the container port (e.g., 3000).
 const port = 3000;
 
 // Basic route
@@ -18,7 +20,7 @@ app.get('/random', (req, res) => {
   res.send(`<h1>Random Number</h1><p>Your random number is: ${randomNumber}</p>`);
 });
 
-// Start the server
-app.listen(port, () => {
+// Start the server and bind it to 0.0.0.0 for ECS and the ALB
+app.listen(port, '0.0.0.0', () => {
   console.log(`App running at http://localhost:${port}`);
 });
